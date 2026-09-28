@@ -1,0 +1,23 @@
+# Blueprint do Render para o relay do Remote Control App.
+#
+# Uso: Render -> New -> Blueprint -> escolher este repositorio.
+# Alternativa: criar o Web Service na mao e copiar os mesmos campos do painel.
+#
+# IMPORTANTE: o build instala APENAS o requirements.txt desta pasta.
+# NUNCA aponte para o requirements.txt da raiz do projeto: ele tem pystray,
+# pynput e Pillow, que dependem de X11 e QUEBRAM o build no Linux do Render.
+services:
+  - type: web
+    name: remote-relay
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python relay_server.py
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.13.7"
+      # sync: false = o Render pede o valor no painel e nao grava no repositorio.
+      # Sem chave, o relay fica ABERTO (qualquer um com a URL controla o PC).
+      - key: RELAY_KEY
+        sync: false

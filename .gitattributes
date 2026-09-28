@@ -1,0 +1,3 @@
+# O Render roda Linux. Garante LF no repositorio mesmo se alguem editar no
+# Windows: um CRLF no Procfile pode quebrar o start do servico.
+* text=auto eol=lf
