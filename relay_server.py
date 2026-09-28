@@ -54,6 +54,11 @@ _stats = {"server": 0, "client": 0}
 #   - se nunca aparecer -> o edge esta engolindo o upgrade antes de chegar aqui
 _rotas = {}
 
+# DIAGNOSTICO 2: guarda os cabecalhos da ultima requisicao nao-health (o
+# upgrade WebSocket). Se o handler nao roda mas o process_request roda, a
+# diferenca esta nos cabecalhos que o proxy do Render manda.
+_ultimo_req = {}
+
 _server_ws = None
 _client_ws = None
 _lock = asyncio.Lock()
@@ -105,7 +110,15 @@ def process_request(connection, request):
     # Diagnostico: registra a rota e faz barulho quando nao for health check.
     _rotas[path] = _rotas.get(path, 0) + 1
     if path not in ("/health", "/healthz"):
-        logging.info(f"Requisicao vista pelo app: {path}")
+        try:
+            _ultimo_req[path] = {
+                "headers": {str(k): str(v) for k, v in dict(getattr(request, "headers", {}) or {}).items()},
+                "tem_upgrade": "upgrade" in str(getattr(request, "headers", {}) or "").lower(),
+                "websockets": websockets.__version__,
+            }
+        except Exception as e:
+            _ultimo_req[path] = {"erro": repr(e)}
+        logging.info(f"Requisicao vista pelo app: {path} | {_ultimo_req[path]}")
 
     if path in ("/health", "/healthz"):
         body = json.dumps({
@@ -115,6 +128,7 @@ def process_request(connection, request):
             "client_online": _client_ws is not None,
             "conexoes": _stats,
             "rotas": dict(_rotas),
+            "ultimo_req": _ultimo_req,
         }).encode("utf-8")
         return Response(200, "OK", Headers({
             "Content-Type": "application/json",
