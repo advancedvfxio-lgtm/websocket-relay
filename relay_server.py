@@ -18,6 +18,7 @@ Variaveis de ambiente:
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -62,6 +63,24 @@ _ultimo_req = {}
 # DIAGNOSTICO 3: incrementado na PRIMEIRA linha do handler, antes de qualquer
 # await. Separa "o handler nunca e chamado" de "e chamado e trava depois".
 _handler_chamado = 0
+
+# DIAGNOSTICO 4: rastro de onde o handler parou. Cada passo grava aqui antes
+# de qualquer await, e o /health devolve. Mostra a linha exata do travamento.
+_ultimo_passo = {"onde": "nenhuma conexao ainda", "t": 0.0}
+
+
+def _passo(texto):
+    global _ultimo_passo
+    _ultimo_passo = {"onde": texto, "t": round(time.time() - STARTED_AT, 1)}
+    logging.info(f"[PASSO] {texto}")
+
+
+# Impressao digital da chave (nunca o valor): tamanho + 8 chars do sha256.
+# Serve para comparar com o que o cliente manda, sem vazar o segredo.
+_KEY_FP = {
+    "len": len(RELAY_KEY),
+    "sha256_8": hashlib.sha256(RELAY_KEY.encode()).hexdigest()[:8] if RELAY_KEY else "",
+}
 
 _server_ws = None
 _client_ws = None
@@ -116,6 +135,7 @@ def process_request(connection, request):
     if path not in ("/health", "/healthz"):
         try:
             _ultimo_req[path] = {
+                "raw_path": str(getattr(request, "path", "")),
                 "headers": {str(k): str(v) for k, v in dict(getattr(request, "headers", {}) or {}).items()},
                 "tem_upgrade": "upgrade" in str(getattr(request, "headers", {}) or "").lower(),
                 "websockets": websockets.__version__,
@@ -134,6 +154,8 @@ def process_request(connection, request):
             "rotas": dict(_rotas),
             "ultimo_req": _ultimo_req,
             "handler_chamado": _handler_chamado,
+            "ultimo_passo": _ultimo_passo,
+            "chave": _KEY_FP,
         }).encode("utf-8")
         return Response(200, "OK", Headers({
             "Content-Type": "application/json",
@@ -159,21 +181,26 @@ async def handler(websocket):
     global _server_ws, _client_ws, _handler_chamado
 
     _handler_chamado += 1
-    print(f"!!! handler() ENTROU -- chamada #{_handler_chamado}", flush=True)
+    _passo("1. entrou no handler")
 
     path = _path_of(websocket)
-    logging.info(
-        f"handler() CHAMADO -- path={path!r} | chave {'presente' if _key_of(websocket) else 'AUSENTE'}"
-    )
-    if RELAY_KEY and _key_of(websocket) != RELAY_KEY:
+    _passo(f"2. path lido: {path!r}")
+
+    chave_bate = (not RELAY_KEY) or (_key_of(websocket) == RELAY_KEY)
+    _passo(f"3. checagem de chave: {'OK' if chave_bate else 'RECUSADA'}")
+
+    if not chave_bate:
         logging.warning(f"Recusado (chave invalida): {websocket.remote_address}")
         await websocket.close(code=1008, reason="chave invalida")
+        _passo("4. fechou por chave invalida")
         return
 
     is_server = "server" in path
     logging.info(f"Nova conexao WebSocket: {websocket.remote_address} | Path: {path}")
+    _passo("5. vai tentar pegar o lock")
 
     async with _lock:
+        _passo("6. LOCK ADQUIRIDO")
         if is_server:
             if _server_ws and _server_ws != websocket:
                 try:
