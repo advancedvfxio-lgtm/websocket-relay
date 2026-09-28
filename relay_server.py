@@ -59,6 +59,10 @@ _rotas = {}
 # diferenca esta nos cabecalhos que o proxy do Render manda.
 _ultimo_req = {}
 
+# DIAGNOSTICO 3: incrementado na PRIMEIRA linha do handler, antes de qualquer
+# await. Separa "o handler nunca e chamado" de "e chamado e trava depois".
+_handler_chamado = 0
+
 _server_ws = None
 _client_ws = None
 _lock = asyncio.Lock()
@@ -129,6 +133,7 @@ def process_request(connection, request):
             "conexoes": _stats,
             "rotas": dict(_rotas),
             "ultimo_req": _ultimo_req,
+            "handler_chamado": _handler_chamado,
         }).encode("utf-8")
         return Response(200, "OK", Headers({
             "Content-Type": "application/json",
@@ -151,7 +156,10 @@ def process_request(connection, request):
 
 
 async def handler(websocket):
-    global _server_ws, _client_ws
+    global _server_ws, _client_ws, _handler_chamado
+
+    _handler_chamado += 1
+    print(f"!!! handler() ENTROU -- chamada #{_handler_chamado}", flush=True)
 
     path = _path_of(websocket)
     logging.info(
