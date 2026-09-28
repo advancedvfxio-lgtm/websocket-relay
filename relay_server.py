@@ -18,7 +18,6 @@ Variaveis de ambiente:
 """
 
 import asyncio
-import hashlib
 import json
 import logging
 import os
@@ -48,39 +47,6 @@ MAX_MSG = None
 
 STARTED_AT = time.time()
 _stats = {"server": 0, "client": 0}
-
-# DIAGNOSTICO: conta toda requisicao HTTP que CHEGA no app, inclusive os
-# upgrades WebSocket (process_request e chamado antes do handshake).
-#   - se "/ws/server" aparecer em /health -> o edge do Render entregou a conexao
-#   - se nunca aparecer -> o edge esta engolindo o upgrade antes de chegar aqui
-_rotas = {}
-
-# DIAGNOSTICO 2: guarda os cabecalhos da ultima requisicao nao-health (o
-# upgrade WebSocket). Se o handler nao roda mas o process_request roda, a
-# diferenca esta nos cabecalhos que o proxy do Render manda.
-_ultimo_req = {}
-
-# DIAGNOSTICO 3: incrementado na PRIMEIRA linha do handler, antes de qualquer
-# await. Separa "o handler nunca e chamado" de "e chamado e trava depois".
-_handler_chamado = 0
-
-# DIAGNOSTICO 4: rastro de onde o handler parou. Cada passo grava aqui antes
-# de qualquer await, e o /health devolve. Mostra a linha exata do travamento.
-_ultimo_passo = {"onde": "nenhuma conexao ainda", "t": 0.0}
-
-
-def _passo(texto):
-    global _ultimo_passo
-    _ultimo_passo = {"onde": texto, "t": round(time.time() - STARTED_AT, 1)}
-    logging.info(f"[PASSO] {texto}")
-
-
-# Impressao digital da chave (nunca o valor): tamanho + 8 chars do sha256.
-# Serve para comparar com o que o cliente manda, sem vazar o segredo.
-_KEY_FP = {
-    "len": len(RELAY_KEY),
-    "sha256_8": hashlib.sha256(RELAY_KEY.encode()).hexdigest()[:8] if RELAY_KEY else "",
-}
 
 _server_ws = None
 _client_ws = None
@@ -129,21 +95,6 @@ def _key_of(websocket):
 def process_request(connection, request):
     """Responde HTTP puro em /health e / -- o upgrade WebSocket segue normal."""
     path = _split_path(getattr(request, "path", ""))[0]
-
-    # Diagnostico: registra a rota e faz barulho quando nao for health check.
-    _rotas[path] = _rotas.get(path, 0) + 1
-    if path not in ("/health", "/healthz"):
-        try:
-            _ultimo_req[path] = {
-                "raw_path": str(getattr(request, "path", "")),
-                "headers": {str(k): str(v) for k, v in dict(getattr(request, "headers", {}) or {}).items()},
-                "tem_upgrade": "upgrade" in str(getattr(request, "headers", {}) or "").lower(),
-                "websockets": websockets.__version__,
-            }
-        except Exception as e:
-            _ultimo_req[path] = {"erro": repr(e)}
-        logging.info(f"Requisicao vista pelo app: {path} | {_ultimo_req[path]}")
-
     if path in ("/health", "/healthz"):
         body = json.dumps({
             "status": "ok",
@@ -151,11 +102,6 @@ def process_request(connection, request):
             "server_online": _server_ws is not None,
             "client_online": _client_ws is not None,
             "conexoes": _stats,
-            "rotas": dict(_rotas),
-            "ultimo_req": _ultimo_req,
-            "handler_chamado": _handler_chamado,
-            "ultimo_passo": _ultimo_passo,
-            "chave": _KEY_FP,
         }).encode("utf-8")
         return Response(200, "OK", Headers({
             "Content-Type": "application/json",
@@ -178,29 +124,18 @@ def process_request(connection, request):
 
 
 async def handler(websocket):
-    global _server_ws, _client_ws, _handler_chamado
-
-    _handler_chamado += 1
-    _passo("1. entrou no handler")
+    global _server_ws, _client_ws
 
     path = _path_of(websocket)
-    _passo(f"2. path lido: {path!r}")
-
-    chave_bate = (not RELAY_KEY) or (_key_of(websocket) == RELAY_KEY)
-    _passo(f"3. checagem de chave: {'OK' if chave_bate else 'RECUSADA'}")
-
-    if not chave_bate:
+    if RELAY_KEY and _key_of(websocket) != RELAY_KEY:
         logging.warning(f"Recusado (chave invalida): {websocket.remote_address}")
         await websocket.close(code=1008, reason="chave invalida")
-        _passo("4. fechou por chave invalida")
         return
 
     is_server = "server" in path
     logging.info(f"Nova conexao WebSocket: {websocket.remote_address} | Path: {path}")
-    _passo("5. vai tentar pegar o lock")
 
     async with _lock:
-        _passo("6. LOCK ADQUIRIDO")
         if is_server:
             if _server_ws and _server_ws != websocket:
                 try:
