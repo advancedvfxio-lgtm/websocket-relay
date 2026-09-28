@@ -48,6 +48,12 @@ MAX_MSG = None
 STARTED_AT = time.time()
 _stats = {"server": 0, "client": 0}
 
+# DIAGNOSTICO: conta toda requisicao HTTP que CHEGA no app, inclusive os
+# upgrades WebSocket (process_request e chamado antes do handshake).
+#   - se "/ws/server" aparecer em /health -> o edge do Render entregou a conexao
+#   - se nunca aparecer -> o edge esta engolindo o upgrade antes de chegar aqui
+_rotas = {}
+
 _server_ws = None
 _client_ws = None
 _lock = asyncio.Lock()
@@ -95,6 +101,12 @@ def _key_of(websocket):
 def process_request(connection, request):
     """Responde HTTP puro em /health e / -- o upgrade WebSocket segue normal."""
     path = _split_path(getattr(request, "path", ""))[0]
+
+    # Diagnostico: registra a rota e faz barulho quando nao for health check.
+    _rotas[path] = _rotas.get(path, 0) + 1
+    if path not in ("/health", "/healthz"):
+        logging.info(f"Requisicao vista pelo app: {path}")
+
     if path in ("/health", "/healthz"):
         body = json.dumps({
             "status": "ok",
@@ -102,6 +114,7 @@ def process_request(connection, request):
             "server_online": _server_ws is not None,
             "client_online": _client_ws is not None,
             "conexoes": _stats,
+            "rotas": dict(_rotas),
         }).encode("utf-8")
         return Response(200, "OK", Headers({
             "Content-Type": "application/json",
@@ -127,6 +140,9 @@ async def handler(websocket):
     global _server_ws, _client_ws
 
     path = _path_of(websocket)
+    logging.info(
+        f"handler() CHAMADO -- path={path!r} | chave {'presente' if _key_of(websocket) else 'AUSENTE'}"
+    )
     if RELAY_KEY and _key_of(websocket) != RELAY_KEY:
         logging.warning(f"Recusado (chave invalida): {websocket.remote_address}")
         await websocket.close(code=1008, reason="chave invalida")
@@ -172,6 +188,8 @@ async def handler(websocket):
                     logging.warning("Servidor enviou mensagem, mas o RemoteClient nao esta conectado ao Relay.")
     except websockets.exceptions.ConnectionClosed:
         logging.info(f"Conexao encerrada: {'RemoteServer' if is_server else 'RemoteClient'}")
+    except Exception:
+        logging.exception("Erro inesperado no handler")
     finally:
         async with _lock:
             if is_server and _server_ws == websocket:
