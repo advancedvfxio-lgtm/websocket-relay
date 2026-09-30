@@ -190,12 +190,27 @@ async def main():
         logging.warning("RELAY_KEY vazio: o relay esta ABERTO. Em host publico, defina RELAY_KEY.")
     # compression=None: o trafego ja e JPEG (nao comprime) -- deflate so gastaria
     # CPU e atrasaria o frame.
+    #
+    # ping_interval=None (30/09/2026): o relay NAO decide mais que uma sessao
+    # morreu por nao receber PONG em 20 s. O PONG de quem esta mandando os
+    # blocos entra na MESMA fila dos blocos de 256 KB (`Protocol.send_frame` faz
+    # `writes.append`), entao basta o outro lado parar de ler -- disco cheio
+    # gravando 2 GB -- para o PONG atrasar e o relay matar um lado que estava
+    # saudavel no meio de uma transferencia (ver nosso.md §32):
+    #
+    #   sent 1011 (internal error) keepalive ping timeout;
+    #   no close frame received   ->  RemoteServer desconectado.
+    #
+    # Quem mantem a conexao viva para a borda da Render e o frame de DADOS que
+    # os dois lados mandam a cada 20 s (`relaycfg.WS_KEEPALIVE_S`); PING/PONG de
+    # protocolo nao contavam para a borda de qualquer forma. O relay continua
+    # limpando o registro quando a conexao fecha de verdade (FIN/RST) ou quando
+    # um encaminhamento falha.
     async with websockets.serve(
         handler, "0.0.0.0", PORT,
         max_size=MAX_MSG,
         compression=None,
-        ping_interval=20,
-        ping_timeout=20,
+        ping_interval=None,
         process_request=process_request,
     ):
         await asyncio.Future()  # roda para sempre

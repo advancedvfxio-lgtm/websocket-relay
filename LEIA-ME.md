@@ -87,21 +87,26 @@ Ou simplesmente abra a URL no navegador: tem que aparecer
 **"Remote Relay online."**
 
 Se o `testar_relay.py` disser `server_online: false`, é porque o
-`RemoteServer.exe` ainda não está rodando ou o `config.json` dele está sem a URL.
+`RemoteServer.exe` ainda não está rodando — ou o exe dele aponta para **outro**
+relay (o endereço vai compilado dentro do exe, veja o Passo E).
 
 ---
 
 ## Passo E — Apontar os exes (o passo que faz funcionar)
 
-Crie um arquivo `config.json` **na pasta do exe** (`dist/`), igual para os dois:
+> ⚠️ **Atualizado em 29/09/2026:** não existe mais `config.json` ao lado do exe.
+> O endereço e a chave são **compilados dentro** dos dois `.exe`. Trocar exige
+> **recompilar**.
 
-```json
-{
-  "relay_host": "remote-relay-xxxx.onrender.com",
-  "relay_key": "a-mesma-senha-que-voce-pôs-no-RELAY_KEY",
-  "auto_connect": false,
-  "reconnect_max_seconds": 30,
-  "keepalive_seconds": 600
+Edite o dicionário `EMBUTIDO` em **`relaycfg.py`**:
+
+```python
+EMBUTIDO = {
+    "relay_host": "remote-relay-xxxx.onrender.com",
+    "relay_key": "a-mesma-senha-que-voce-pôs-no-RELAY_KEY",
+    "auto_connect": True,
+    "reconnect_max_seconds": 30,
+    "keepalive_seconds": 600,
 }
 ```
 
@@ -113,7 +118,22 @@ Crie um arquivo `config.json` **na pasta do exe** (`dist/`), igual para os dois:
 - **`keepalive_seconds`**: só o servidor usa. **Não passe de 720 (12 min)** — o
   Render derruba com 15 min sem tráfego. 600 (10 min) é o recomendado.
 
-Feche e reabra os dois exes. No cliente, o campo **Host** já vem preenchido.
+Depois **recompile os dois** (um spec por vez):
+
+```bash
+set APPDATA=C:\Users\akg\AppData\Roaming
+python -m PyInstaller --noconfirm RemoteServer.spec
+python -m PyInstaller --noconfirm RemoteClient.spec
+```
+
+Na máquina controlada vai **só o `RemoteServer.exe`** — nenhum arquivo junto.
+
+> **Para testar sem recompilar:** um `config.json` na pasta do exe ainda é lido e
+> **ganha** do valor embutido (o exe registra isso no log). O exe nunca cria esse
+> arquivo por conta própria.
+
+No cliente, o campo **Host** mostra o endereço embutido e **não salva** o que for
+digitado ali.
 
 ---
 
@@ -124,7 +144,7 @@ Feche e reabra os dois exes. No cliente, o campo **Host** já vem preenchido.
 | Build falhou no Render | apontou para o `requirements.txt` da raiz |
 | Cliente diz "chave inválida" | `relay_key` diferente do `RELAY_KEY` |
 | Primeira conexão demora ~40s | Render acordando da hibernação. O auto-reconnect resolve sozinho |
-| "server_online: false" | `RemoteServer.exe` fechado ou sem a URL no `config.json` |
+| "server_online: false" | `RemoteServer.exe` fechado, ou o exe aponta para outro relay (endereço embutido) |
 | Relay dorme e cai | normal no Free após ~15 min sem tráfego; o keep-alive + auto-reconnect cuidam disso |
 
 **Limite do plano Free:** 750 h/mês. Um serviço ligado 24/7 consome ~730 h —
